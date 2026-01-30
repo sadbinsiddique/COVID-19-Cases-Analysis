@@ -1,0 +1,172 @@
+---
+title: "COVID-19 Cases Analysis"
+author: "Sad Bin Siddique"
+date: "2026-01-29"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(tidyverse) 
+library(lubridate)  
+library(scales)     
+library(zoo)        
+raw_data <- read.csv("data.csv", header = TRUE, sep = ',')
+```
+
+## Answer Of Question One
+
+> Reshape the Johns Hopkins data to long format so that instead of having many columns of cases `Each one corresponding to different data` you have one column that stores the dates. Only include the dates `1/22/20` - `10/31/20`. Then convert your new data column to be a data type instead of character type.
+
+```{r}
+df <- raw_data %>%
+  pivot_longer(cols = starts_with("X"), names_to = "date", values_to = "cases") %>%
+  mutate(date = mdy(gsub("\\.", "/", sub("^X", "", date)))) %>%
+  filter(date >= as.Date("2020-01-22") & date <= as.Date("2020-10-31"))
+
+head(df)
+```
+
+-   Handle syntactic column names created by `read.csv()`
+-   Reshape Johns Hopkins time series to long format for dates 1/22/20 - 10/31/20.
+-   Pivot all X-prefixed date columns, convert to Date, then filter to desired range
+
+## Answer Of Question Two
+
+> The data-set keeps track of the number of confirmed cases reported for states, provinces and other sub-regions within a given country. We would like to only look at the overall number number if cases in each country. Create a new data frame with three columns : `country name`, `date`, and the `total number of cases` in the country one that day.
+
+> If we get any warning, you need to explain why are you getting the warning.
+
+```{r new_df}
+new_df<- df %>%
+  mutate(cases = as.numeric(cases)) %>%
+  group_by(Country.Region, date) %>%
+  summarize(total_cases = sum(cases, na.rm = TRUE), .groups = "drop") %>%
+  rename(country_name = Country.Region)
+
+head(new_df)
+```
+
+-   Aggregate to country-level totals per date.
+-   Create with columns: `country_name`, `date`, `total_cases`.
+-   Coercion warnings if `cases` contains non-numeric values **coerce to numeric with `as.numeric()` and use `na.rm = TRUE` in `sum()`**.
+
+## Answer Of Question Three
+
+> Using your new data farm, make a line plot of the number of confirmed cases versus date for the following countries : `China`, `Colombia`, `Germany`, `Nigeria` and `United States`. Be sure appropriate axis labels and a title for your plot. Comment on what you see.
+
+```{r, echo=TRUE}
+selected_countries <- c("China", "Colombia", "Germany", "Nigeria", "US")
+
+selected_countries_df <- new_df %>%
+  filter(country_name %in% selected_countries) %>%
+  filter(!is.na(total_cases) & total_cases > 0)
+
+p <- ggplot(selected_countries_df, aes(x = date, y = total_cases, color = country_name)) +
+  geom_line(linewidth = 1) + 
+  scale_y_continuous(labels = comma) + 
+  labs(title = "COVID-19 Cases", subtitle = "Analysis: Jan 2020 - Oct 2020", x = "Timeline", y = "Confirmed Cases", color = "Country") + theme_minimal()
+
+print(p)
+```
+
+-   The United States acts as a massive outline, ending the period with over 7.5 million cases, dwarfing the other four nations combined.
+-   China shows the earliest rise followed by an immediate, sharp plateau in March, indicating early containment compared to the ongoing surges elsewhere.
+-   Colombia remained flat until July, after which it saw a rapid spike, eventually overtaking Germany and Nigeria in total volume.
+
+## Answer Of Question Four
+
+> The number of cases varies greatly between these five countries. This stretches out the scale of the y-axis in your plot, making it difficult to see What's going on in countries where there are relatively few cases. Transforming the data can make it easier to interpret your time series plot. Recreate your plot from question 3, but use a log scale transformation `with base 10` for the y-axis. Describe something that you see in this plot that was not as obvious in previous Plot.
+
+```{r, echo=TRUE}
+p_log <- ggplot(selected_countries_df, aes(x = date, y = total_cases, color = country_name)) +
+  geom_line(linewidth = 1) + 
+  scale_y_log10(labels = comma) + 
+  labs(
+    title = "COVID-19 Cases (Log Scale)",
+    subtitle = "Analysis: Jan 2020 - Oct 2020",
+    x = "Timeline",
+    y = "Total Confirmed Cases",
+    color = "Country"
+  ) + 
+  theme_minimal()
+
+print(p_log)
+```
+
+-   While Nigeria appeared as a flat line in the linear plot, the log scale shows a clear, steady diagonal slope, indicating consistent exponential growth starting in late March.
+
+-   The transformation highlights how China’s cases jumped rapidly to nearly 100,000 before hitting an almost perfectly horizontal line in March, signaling an immediate halt in growth.
+
+-   Between June and August, Colombia’s line is steeper than both the US and Germany, showing that its cases were doubling at a faster rate during that specific time frame.
+
+-   The log scale clarifies that the US, Germany, and Nigeria all began their primary vertical climbs simultaneously in March, an event that was visually \`crushed\` at the bottom of the previous graph.
+
+## Answer Of Question Five
+
+> Create a New Variable in your country-level data frame that contains the number of new confirmed cases.
+
+```{r}
+selected_countries_df <- selected_countries_df %>%
+  arrange(country_name, date) %>%
+  group_by(country_name) %>%
+  mutate(
+    total_cases = cummax(total_cases),
+    new_cases = total_cases - lag(total_cases),
+    new_cases = ifelse(is.na(new_cases), total_cases, new_cases)
+  ) %>%
+  ungroup()
+
+head(selected_countries_df)
+```
+
+## Answer Of Question Six
+
+> The high amount of day-to-day fluctuation in the number of new cases makes it difficult to interpret plots involving this variable. (You can make a plot to see this behavior in action) Many public dashboards and reporting tools prefer to look at seven-day rolling averages. We will define the seven-day rolling average of new cases as the average of the new cases reported on a given day, the three days before, and the three days after. It's a "rolling" average because the window of seven days moves along as you calculate the averages for new dates.
+
+> Add the seven-day rolling average of new cases as a new variable in your data frame. Then, re-do your plot from question 3, but plot the seven-day rolling average of new cases on the y-axis. Comment on what you see, especially anything that was not readily apparent in your plots from question 3 and question 4.
+
+```{r, echo=TRUE}
+selected_countries_df <- selected_countries_df %>%
+  group_by(country_name) %>%
+  arrange(date) %>%
+  mutate(seven_day_avg = rollmean(new_cases, k = 7, fill = NA, align = "center")) %>%
+  ungroup()
+
+p_rolling <- ggplot(selected_countries_df, aes(x = date, y = seven_day_avg, color = country_name)) +
+  geom_line(linewidth = 1) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "7 Day Rolling Average",
+    x = "Date",
+    y = "7 day average",
+    color = "Country"
+  ) +
+  theme_minimal()
+
+print(p_rolling)
+```
+
+## Answer Of Question Seven
+
+> When you make your plot, you will get a warning message about rows. Explain the warning. How you can handle this problem?
+
+```{r, echo=TRUE}
+selected_countries_df %>%
+  filter(!is.na(seven_day_avg)) %>%
+  ggplot(aes(x = date, y = seven_day_avg, color = country_name)) +
+  geom_line()
+```
+
+-   The warning `Removed 6 rows containing missing values (geom_path)`
+
+Why it happens
+
+-   For the first 3 days in your data set, there are no `3 days before` to calculate an average with.
+-   For the last 3 days in your data set, there are no `3 days after` to calculate an average with.
+-   Because the math is impossible for those specific days, R fills those 6 rows `3 at the top, 3 at the bottom` with `NA`. When ggplot2 tries to plot these
+
+Solution
+
+-   Filtering `NA`: By using `filter(!is.na(seven_day_avg))` for removing those incomplete rows before the data is handed to the ggplot function.
